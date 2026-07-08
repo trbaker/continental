@@ -71,6 +71,7 @@
     background:linear-gradient(90deg, var(--panel) 0%, var(--panel-2) 100%);
     border-bottom:2px solid var(--gold); flex-wrap:wrap; z-index:1200;
   }
+  #strip .logo{flex:none; margin-right:-6px;}
   #strip .title{font-family:'Staatliches'; font-size:1.15rem; letter-spacing:.12em; color:var(--gold);}
   #turn-flag{display:flex; align-items:center; gap:8px; background:#0C1626; border-radius:999px; padding:5px 14px 5px 8px; border:1px solid var(--line);}
   #turn-flag .dot{width:16px;height:16px;}
@@ -147,7 +148,15 @@
 <div id="lobby">
   <div class="lobby-card" id="lobby-home">
     <div class="kicker">A GEOGRAPHY STRATEGY GAME</div>
-    <h1>CONTINENTAL</h1>
+    <h1 style="display:flex;align-items:center;gap:14px;"><svg class="logo" viewBox="0 0 26 26" width="52" height="52" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="#FFC93C" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="13" cy="14" r="9"/>
+        <ellipse cx="13" cy="14" rx="4" ry="9"/>
+        <path d="M4.6 11 h16.8 M4.6 17 h16.8"/>
+        <path d="M13 5 V1.6"/>
+      </g>
+      <path d="M13 1.6 l6 2.2 -6 2.2 z" fill="#FFC93C"/>
+    </svg><span>CONTINENTAL</span></h1>
     <p class="lobby-sub">Claim real countries on a live world map, reinforce your borders, and out-maneuver up to three classmates. Built on ArcGIS map services.</p>
     <div class="mode-grid">
       <div class="mode">
@@ -178,7 +187,7 @@
       </div>
     </div>
     <div class="err" id="lobby-err"></div>
-    <p class="lobby-foot">Any number of games can run at the same time — each code is its own match. Online games store the game code, player names, and board state in this app's shared storage, which is visible to other users of the app, so use first names or nicknames only.</p>
+    <p class="lobby-foot">Any number of games can run at the same time — each code is its own match. Online games store the game code, player names, and board state in a shared class database, so use first names or nicknames only.</p>
   </div>
 
   <div class="lobby-card" id="lobby-wait" style="display:none; text-align:center;">
@@ -197,6 +206,15 @@
 <!-- ============ GAME ============ -->
 <div id="game">
   <div id="strip">
+    <svg class="logo" viewBox="0 0 26 26" width="24" height="24" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="#FFC93C" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="13" cy="14" r="9"/>
+        <ellipse cx="13" cy="14" rx="4" ry="9"/>
+        <path d="M4.6 11 h16.8 M4.6 17 h16.8"/>
+        <path d="M13 5 V1.6"/>
+      </g>
+      <path d="M13 1.6 l6 2.2 -6 2.2 z" fill="#FFC93C"/>
+    </svg>
     <span class="title">CONTINENTAL</span>
     <span id="game-code-chip" style="color:var(--muted); font-size:.85rem;"></span>
     <div id="turn-flag"><span class="dot" id="turn-dot"></span><b id="turn-name">—</b></div>
@@ -255,6 +273,7 @@
    CONTINENTAL — a Risk-style geography game for classrooms
    Map data: ArcGIS Online REST services (Esri basemap tiles +
    World Countries Generalized FeatureServer, Esri Living Atlas)
+   Multiplayer sync: Supabase (PostgREST) — see setup notes below
    ===================================================================== */
 'use strict';
 
@@ -375,17 +394,46 @@ function roll(){ return 1 + Math.floor(Math.random()*6); }
 function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
 function randCode(){ const A='ABCDEFGHJKMNPQRSTUVWXYZ'; let s=''; for(let i=0;i<4;i++) s+=A[Math.floor(Math.random()*A.length)]; return s; }
 
-/* ---------------- Shared storage (multiplayer sync) ---------------- */
-const KEY = code => 'cc-game-' + code;
+/* ---------------- Supabase (multiplayer sync via a `games` table) ----------------
+   Setup (once, ~5 minutes):
+   1. Create a free project at supabase.com
+   2. In the SQL Editor, run the script in supabase-setup.sql (creates the
+      `games` table and open read/write policies for the anon key)
+   3. Paste your Project URL and anon public key below (Settings → API)
+   The game talks to Supabase's PostgREST endpoint directly with fetch —
+   no client library needed. The anon key is safe to publish; it only
+   grants what the table policies allow.
+------------------------------------------------------------------------------- */
+const SUPABASE_URL = 'https://dchovdwsvzacmbsdygrz.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_Vm7xumfNaObjGL-yP2EvtQ_kG__2NRT';
+
+function supabaseConfigured(){
+  return SUPABASE_URL.startsWith('https://') && SUPABASE_ANON_KEY.length > 20;
+}
+const SB_HEADERS = () => {
+  const h = { 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json' };
+  if(SUPABASE_ANON_KEY.startsWith('eyJ')) h['Authorization'] = 'Bearer ' + SUPABASE_ANON_KEY; // legacy JWT keys only
+  return h;
+};
 async function storeGet(code){
-  try{ const r = await window.storage.get(KEY(code), true); return r ? JSON.parse(r.value) : null; }
-  catch(e){ return null; }
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/games?code=eq.${encodeURIComponent(code)}&select=data`,
+      { headers: SB_HEADERS() });
+    if(!res.ok) return null;
+    const rows = await res.json();
+    return rows.length ? rows[0].data : null;
+  }catch(e){ return null; }
 }
 async function storeSet(code, obj){
-  try{ const r = await window.storage.set(KEY(code), JSON.stringify(obj), true); return !!r; }
-  catch(e){ return false; }
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/games?on_conflict=code`, {
+      method:'POST',
+      headers: { ...SB_HEADERS(), 'Prefer':'resolution=merge-duplicates' },
+      body: JSON.stringify([{ code, data: obj, version: obj.version, updated_at: new Date().toISOString() }])
+    });
+    return res.ok;
+  }catch(e){ return false; }
 }
-function storageAvailable(){ return typeof window.storage !== 'undefined' && window.storage && typeof window.storage.set === 'function'; }
 
 /* =====================================================================
    GAME ENGINE (pure functions over the game object)
@@ -762,7 +810,7 @@ function showLobbyErr(msg){ $('lobby-err').textContent = msg; }
 $('btn-create').onclick = async () => {
   const name = $('host-name').value.trim();
   if(!name) return showLobbyErr('Enter your name first.');
-  if(!storageAvailable()) return showLobbyErr('Online play needs app storage, which is unavailable here — use Play on one device instead.');
+  if(!supabaseConfigured()) return showLobbyErr('Online play isn\'t set up yet — the site owner needs to add the Supabase URL and key at the top of this file. Pass-and-play still works!');
   showLobbyErr('');
   let code, tries=0;
   do{ code = randCode(); tries++; }while(await storeGet(code) && tries<8);
@@ -770,7 +818,7 @@ $('btn-create').onclick = async () => {
   G = newGame(code, [{id:session.playerId, name}]);
   localVersion = G.version;
   const ok = await storeSet(code, G);
-  if(!ok) return showLobbyErr('Could not create the game — storage is unavailable. Try pass-and-play.');
+  if(!ok) return showLobbyErr('Could not reach the game database. Check your connection (or the Supabase setup) and try again.');
   showWaitingRoom();
 };
 
@@ -778,7 +826,7 @@ $('btn-join').onclick = async () => {
   const name = $('join-name').value.trim();
   const code = $('join-code').value.trim().toUpperCase();
   if(!name || code.length!==4) return showLobbyErr('Enter your name and the 4-letter code.');
-  if(!storageAvailable()) return showLobbyErr('Online play needs app storage, which is unavailable here — use Play on one device instead.');
+  if(!supabaseConfigured()) return showLobbyErr('Online play isn\'t set up yet — the site owner needs to add the Supabase URL and key at the top of this file. Pass-and-play still works!');
   showLobbyErr('');
   const g = await storeGet(code);
   if(!g) return showLobbyErr(`No game found with code ${code}. Check the code with your host.`);
